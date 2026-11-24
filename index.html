@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ForestFind - Spot the Difference</title>
+<style>
+:root{--bg:#0c1a12;--panel:#14271c;--line:#28503a;--accent:#7ef0a5;--accent2:#ffd166;--text:#f4f6ff;--muted:#8fb59e;--danger:#ff6b81}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:"Segoe UI",system-ui,sans-serif;background:radial-gradient(1000px 700px at 60% -10%,#1c4a30,var(--bg));color:var(--text);min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:20px 12px 44px}
+h1{font-size:clamp(1.4rem,4.5vw,2rem)} h1 span{color:var(--accent)}
+.sub{color:var(--muted);font-size:.85rem;margin:4px 0 14px;text-align:center}
+.hud{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-bottom:14px}
+.chip{background:var(--panel);border:1px solid var(--line);border-radius:99px;padding:6px 14px;font-size:.82rem;color:var(--muted)}
+.chip b{color:var(--text)}
+#stage{display:flex;gap:14px;flex-wrap:wrap;justify-content:center;width:100%}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:10px;box-shadow:0 16px 44px rgba(0,0,0,.45)}
+canvas{display:block;border-radius:10px;width:min(520px,92vw);height:auto;cursor:crosshair;touch-action:manipulation}
+.row{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:16px}
+.btn{background:linear-gradient(135deg,var(--accent),#3fbf6f);border:none;color:#10131f;font-weight:700;padding:11px 22px;border-radius:12px;cursor:pointer;font-size:.95rem;transition:transform .15s}
+.btn:hover{transform:translateY(-2px)}
+.btn.ghost{background:transparent;border:1px solid var(--accent);color:var(--accent)}
+#msg{margin-top:14px;font-weight:700;min-height:24px;text-align:center;color:var(--accent2)}
+.label{text-align:center;font-size:.7rem;color:var(--muted);text-transform:uppercase;letter-spacing:2px;margin-top:6px}
+</style>
+</head>
+<body>
+<h1 id="brand">Forest<span>Find</span></h1>
+<div class="sub" id="tag"></div>
+<div class="hud">
+  <div class="chip">Level <b id="hLevel">1</b>/5</div>
+  <div class="chip">Found <b id="hFound">0</b>/<b id="hTotal">0</b></div>
+  <div class="chip">Time <b id="hTime">0:00</b></div>
+  <div class="chip">Score <b id="hScore">0</b></div>
+  <div class="chip">Best <b id="hBest">0</b></div>
+</div>
+<div id="stage">
+  <div class="panel"><canvas id="left" width="520" height="360"></canvas><div class="label">Picture A</div></div>
+  <div class="panel"><canvas id="right" width="520" height="360"></canvas><div class="label">Picture B - tap the differences</div></div>
+</div>
+<div class="row">
+  <button class="btn ghost" id="hintBtn">Hint (-50)</button>
+  <button class="btn" id="nextBtn" style="display:none">Next Level</button>
+  <button class="btn ghost" id="restartBtn">Restart</button>
+</div>
+<div id="msg"></div>
+<script>
+/* ======================= CONFIG (rebrand here) ======================= */
+const CONFIG = {
+  brandName: "ForestFind",
+  tagline: "Spot every difference hiding in the forest.",
+  levels: 5,          // levels per game
+  diffBase: 2,                 // level L has diffBase + L differences
+  seed: 11,              // art style seed - change for a fresh look
+  key: "forestfind"              // localStorage namespace
+};
+/* ===================== THEME PAINTER (per game) ===================== */
+const THEME = {
+  sky(ctx,W,H,rng){
+    const g=ctx.createLinearGradient(0,0,0,H);
+    g.addColorStop(0,"#aee3ff"); g.addColorStop(.65,"#d8f3dc"); g.addColorStop(1,"#95d5b2");
+    ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+    // sun
+    ctx.fillStyle="#ffd60a"; ctx.beginPath(); ctx.arc(70,60,30,0,7); ctx.fill();
+    ctx.fillStyle="#ffd60a55"; ctx.beginPath(); ctx.arc(70,60,44,0,7); ctx.fill();
+    // clouds
+    ctx.fillStyle="#ffffffcc";
+    for(let i=0;i<3;i++){
+      const x=140+rng()*320, y=30+rng()*50;
+      ctx.beginPath(); ctx.arc(x,y,16,0,7); ctx.arc(x+18,y+4,13,0,7); ctx.arc(x-18,y+4,13,0,7); ctx.fill();
+    }
+    // ground
+    ctx.fillStyle="#74c69d"; ctx.fillRect(0,H-60,W,60);
+    ctx.fillStyle="#52b788"; ctx.fillRect(0,H-34,W,34);
+  },
+  spawn(rng,W,H,level){
+    const kinds=["tree","pine","mushroom","flower","bush","bird"];
+    const n=Math.min(6+level,10), out=[];
+    for(let i=0;i<n;i++){
+      out.push({kind:kinds[Math.floor(rng()*kinds.length)],
+        x:60+rng()*(W-120), y:110+rng()*(H-190),
+        s:.7+rng()*.7, hue:rng()*360|0});
+    }
+    return out;
+  },
+  draw(ctx,o){
+    ctx.save(); ctx.translate(o.x,o.y); ctx.scale(o.s,o.s);
+    const C=h=>`hsl(${o.hue===undefined?h:o.hue},60%,45%)`;
+    if(o.kind==="tree"){
+      ctx.fillStyle="#7f5539"; ctx.fillRect(-5,10,10,22);
+      ctx.fillStyle=`hsl(${o.hue},55%,38%)`;
+      ctx.beginPath(); ctx.arc(0,-4,22,0,7); ctx.arc(-14,6,15,0,7); ctx.arc(14,6,15,0,7); ctx.fill();
+    } else if(o.kind==="pine"){
+      ctx.fillStyle="#7f5539"; ctx.fillRect(-4,14,8,16);
+      ctx.fillStyle=`hsl(${o.hue},55%,32%)`;
+      for(const [w,y] of [[34,14],[26,-4],[18,-20]]){
+        ctx.beginPath(); ctx.moveTo(0,y-16); ctx.lineTo(-w/2,y+8); ctx.lineTo(w/2,y+8); ctx.closePath(); ctx.fill();
+      }
+    } else if(o.kind==="mushroom"){
+      ctx.fillStyle="#f1faee"; ctx.fillRect(-5,0,10,14);
+      ctx.fillStyle=`hsl(${o.hue},70%,50%)`;
+      ctx.beginPath(); ctx.arc(0,0,14,Math.PI,0); ctx.closePath(); ctx.fill();
+      ctx.fillStyle="#ffffffaa";
+      ctx.beginPath(); ctx.arc(-5,-4,2.5,0,7); ctx.arc(5,-6,2.5,0,7); ctx.fill();
+    } else if(o.kind==="flower"){
+      ctx.strokeStyle="#2d6a4f"; ctx.lineWidth=3;
+      ctx.beginPath(); ctx.moveTo(0,16); ctx.lineTo(0,0); ctx.stroke();
+      ctx.fillStyle=`hsl(${o.hue},75%,60%)`;
+      for(let a=0;a<6;a++){ const r=a*Math.PI/3;
+        ctx.beginPath(); ctx.arc(Math.cos(r)*8,Math.sin(r)*8-4,5,0,7); ctx.fill(); }
+      ctx.fillStyle="#ffd60a"; ctx.beginPath(); ctx.arc(0,-4,4.5,0,7); ctx.fill();
+    } else if(o.kind==="bush"){
+      ctx.fillStyle=`hsl(${o.hue},50%,36%)`;
+      ctx.beginPath(); ctx.arc(-12,4,12,0,7); ctx.arc(0,-4,15,0,7); ctx.arc(12,4,12,0,7); ctx.fill();
+    } else if(o.kind==="bird"){
+      ctx.strokeStyle=`hsl(${o.hue},70%,30%)`; ctx.lineWidth=3.5; ctx.lineCap="round";
+      ctx.beginPath(); ctx.arc(-8,0,8,Math.PI*1.15,Math.PI*1.85); ctx.stroke();
+      ctx.beginPath(); ctx.arc(8,0,8,Math.PI*1.15,Math.PI*1.85); ctx.stroke();
+    }
+    ctx.restore();
+  }
+};
+
+/* ============================ ENGINE ============================ */
+const $ = id => document.getElementById(id);
+const W = 520, H = 360;
+let level = 1, score = 0, foundCount = 0, seconds = 0, timerId = null, levelDone = false;
+let objects = [], found = new Set();
+let best = 0; try{ best = +localStorage.getItem(CONFIG.key + "_best") || 0; }catch(e){}
+function mulberry(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+function mutated(o){
+  if(!o.mut) return o;
+  const m = Object.assign({}, o);
+  if(o.mut.type === "color") m.hue = (o.hue + o.mut.by + 360) % 360;
+  if(o.mut.type === "move"){ m.x = o.x + o.mut.dx; m.y = o.y + o.mut.dy; }
+  if(o.mut.type === "size") m.s = o.s * o.mut.by;
+  return m;
+}
+function hitSpots(o){
+  // Clickable zones for a difference: both where it is and where it went.
+  const spots = [{x:o.x, y:o.y, r:Math.max(26, o.s*22)}];
+  if(o.mut && o.mut.type === "move") spots.push({x:o.x+o.mut.dx, y:o.y+o.mut.dy, r:Math.max(26, o.s*22)});
+  return spots;
+}
+function drawScene(ctx, side){
+  THEME.sky(ctx, W, H, mulberry(CONFIG.seed*31 + level*17));
+  for(const o of objects){
+    if(side === "B" && o.mut && o.mut.type === "hide") continue;
+    THEME.draw(ctx, side === "B" ? mutated(o) : o);
+  }
+  // found markers on both pictures
+  for(const idx of found){
+    const o = objects[idx];
+    const p = (side === "B" && o.mut) ? mutated(o) : o;
+    const px = o.mut && o.mut.type === "hide" ? o.x : p.x;
+    const py = o.mut && o.mut.type === "hide" ? o.y : p.y;
+    ring(ctx, px, py);
+  }
+}
+function ring(ctx, x, y){
+  ctx.save();
+  ctx.strokeStyle = "#ff4757"; ctx.lineWidth = 4;
+  ctx.setLineDash([8,5]);
+  ctx.beginPath(); ctx.arc(x, y, 26, 0, 7); ctx.stroke();
+  ctx.restore();
+}
+function redraw(){ drawScene($("left").getContext("2d"), "A"); drawScene($("right").getContext("2d"), "B"); }
+function newLevel(){
+  const rng = mulberry(CONFIG.seed*7919 + level*104729);
+  objects = THEME.spawn(rng, W, H, level);
+  const total = CONFIG.diffBase + level;
+  const idx = objects.map((_,i)=>i);
+  for(let i=idx.length-1;i>0;i--){ const j=Math.floor(rng()*(i+1)); [idx[i],idx[j]]=[idx[j],idx[i]]; }
+  const chosen = idx.slice(0, Math.min(total, objects.length));
+  for(const i of chosen){
+    const o = objects[i];
+    const t = ["hide","color","move","size"][Math.floor(rng()*4)];
+    if(t === "hide") o.mut = {type:"hide"};
+    else if(t === "color") o.mut = {type:"color", by: 90 + Math.floor(rng()*140)};
+    else if(t === "move") o.mut = {type:"move", dx: (rng()<.5?-1:1)*(35+rng()*40)|0, dy: (rng()<.5?-1:1)*(20+rng()*30)|0};
+    else o.mut = {type:"size", by: rng()<.5 ? .55 : 1.6};
+  }
+  found = new Set(); foundCount = 0; levelDone = false; seconds = 0;
+  $("nextBtn").style.display = "none"; $("msg").textContent = "";
+  $("hLevel").textContent = level; $("hTotal").textContent = chosen.length;
+  $("hFound").textContent = 0; $("hScore").textContent = score; $("hBest").textContent = best;
+  clearInterval(timerId);
+  timerId = setInterval(()=>{ if(!levelDone){ seconds++; $("hTime").textContent = Math.floor(seconds/60)+":"+String(seconds%60).padStart(2,"0"); } },1000);
+  redraw();
+}
+function tap(e){
+  if(levelDone) return;
+  const cv = e.currentTarget, rect = cv.getBoundingClientRect();
+  const cx = (e.clientX-rect.left) * (cv.width/rect.width);
+  const cy = (e.clientY-rect.top) * (cv.height/rect.height);
+  for(let i=0;i<objects.length;i++){
+    if(found.has(i) || !objects[i].mut) continue;
+    for(const s of hitSpots(objects[i])){
+      if(Math.hypot(cx-s.x, cy-s.y) <= s.r){
+        found.add(i); foundCount++;
+        score += 100;
+        $("hFound").textContent = foundCount;
+        $("hScore").textContent = score;
+        redraw();
+        if(foundCount === +$("hTotal").textContent) completeLevel();
+        return;
+      }
+    }
+  }
+}
+function completeLevel(){
+  levelDone = true; clearInterval(timerId);
+  const bonus = Math.max(0, 90 - seconds) * 5;
+  score += bonus;
+  $("hScore").textContent = score;
+  if(level >= CONFIG.levels){
+    if(score > best){ best = score; try{ localStorage.setItem(CONFIG.key+"_best", best); }catch(e){} $("hBest").textContent = best; }
+    $("msg").textContent = "All levels cleared! Final score " + score + (score >= best ? " - new best!" : "");
+    $("nextBtn").style.display = "none";
+  } else {
+    $("msg").textContent = "Level " + level + " clear! Time bonus +" + bonus;
+    $("nextBtn").style.display = "inline-block";
+  }
+}
+$("left").addEventListener("click", tap);
+$("right").addEventListener("click", tap);
+$("nextBtn").onclick = () => { level++; newLevel(); };
+$("restartBtn").onclick = () => { level = 1; score = 0; newLevel(); };
+$("hintBtn").onclick = () => {
+  if(levelDone) return;
+  const remaining = objects.map((o,i)=>i).filter(i=>objects[i].mut && !found.has(i));
+  if(!remaining.length) return;
+  score = Math.max(0, score - 50); $("hScore").textContent = score;
+  const o = objects[remaining[0]];
+  const p = o.mut.type === "move" ? mutated(o) : o;
+  [ $("left"), $("right") ].forEach(cv => {
+    const ctx = cv.getContext("2d");
+    const q = cv.id === "left" ? o : p;
+    ctx.save(); ctx.strokeStyle = "#ffd166"; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.arc(q.x, q.y, 30, 0, 7); ctx.stroke(); ctx.restore();
+    setTimeout(redraw, 900);
+  });
+};
+$("tag").textContent = CONFIG.tagline;
+document.title = CONFIG.brandName + " - Spot the Difference";
+newLevel();
+</script>
+</body>
+</html>
